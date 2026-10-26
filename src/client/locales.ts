@@ -85,10 +85,6 @@ export const zh = {
   'settings.readOnly': '当前部署的设置只读。',
   'settings.expand': '展开设置',
   'settings.collapse': '收起设置',
-  'settings.save': '保存',
-  'settings.saving': '保存中…',
-  'settings.discard': '放弃',
-  'settings.unsaved': '未保存',
   'settings.saveFailed': '部署未接受这些值，已保留供你修改。',
   'settings.invalidNumber': '请输入数字，留空则使用默认值。',
 } as const
@@ -172,10 +168,6 @@ export const en = {
   'settings.readOnly': 'This deployment stores settings read-only.',
   'settings.expand': 'Show settings',
   'settings.collapse': 'Hide settings',
-  'settings.save': 'Save',
-  'settings.saving': 'Saving\u2026',
-  'settings.discard': 'Discard',
-  'settings.unsaved': 'Unsaved',
   'settings.saveFailed': 'The deployment did not accept these values; they were left for you to correct.',
   'settings.invalidNumber': 'Enter a number, or leave blank to use the default.',
 } as const

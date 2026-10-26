@@ -86,6 +86,16 @@ export interface PetSettingsCardFace extends CardActions {
  */
 const STATUS_BUBBLE_CHOICES = ['auto', 'off'] as const
 
+/**
+ * The spans the coarse sliders cover, spelled as literals for the same reason.
+ * Size and bubble scale are the schema's own bounds (src/persist.ts); the
+ * insets reach the schema's far end only by typing, so their slider covers the
+ * distances a window can show.
+ */
+export const SIZE_RANGE = { min: 32, max: 1024, step: 1 }
+export const INSET_RANGE = { min: 0, max: 1000, step: 1 }
+export const BUBBLE_SCALE_RANGE = { min: 0.5, max: 2, step: 0.05 }
+
 /** One registry choice as served by '/api/pet/pets'. */
 type PetChoice = PetPreviewDefinition
 
@@ -129,6 +139,8 @@ export class PetSettingsCardController {
   private stagedPetId: string | undefined
   private stagedVisible: boolean | undefined
   private savingPet = false
+  /** A fallback pick made while a write was in flight. */
+  private fallbackQueued = false
   private petSaveFailed = false
   private loaded = false
   private attempts = 0
@@ -222,12 +234,16 @@ export class PetSettingsCardController {
    * Persist the staged selection and visibility through the pet API — the only
    * writer available when the aggregate shell serves this card, since there is
    * no Host settings form to mutate — then confirm the read-back before the
-   * drafts are cleared.
+   * drafts are cleared. A refused write puts both picks back to what the pet
+   * persisted. A pick made while a write is in flight runs once it settles.
    */
   private async saveFallback(): Promise<void> {
     const petId = this.stagedPetId
     const visible = this.stagedVisible
-    if (this.savingPet) return
+    if (this.savingPet) {
+      this.fallbackQueued = true
+      return
+    }
     if (petId === undefined && visible === undefined) return
     if (petId !== undefined && !this.petChoices.includes(petId)) return
     this.savingPet = true
@@ -262,9 +278,15 @@ export class PetSettingsCardController {
       if (this.stagedVisible === visible) this.stagedVisible = undefined
     } catch {
       this.petSaveFailed = true
+      if (this.stagedPetId === petId) this.stagedPetId = undefined
+      if (this.stagedVisible === visible) this.stagedVisible = undefined
     } finally {
       this.savingPet = false
       if (!this.disposed) this.store.set(this.projection())
+    }
+    if (this.fallbackQueued && !this.disposed) {
+      this.fallbackQueued = false
+      await this.saveFallback()
     }
   }
 
@@ -311,6 +333,8 @@ export class PetSettingsCardController {
     const actions = this.form.actions()
     return {
       hooks: { petSettingsCard: this.store },
+      // The fallback's two fields are both picks, so each is written through
+      // the pet API the moment it is made, as the form writes its own picks.
       edit: (field, value) => {
         if (!this.fallback()) return actions.edit(field, value)
         if (field === 'petId') this.stagedPetId = value === '' ? undefined : value
@@ -318,6 +342,7 @@ export class PetSettingsCardController {
         else return
         this.petSaveFailed = false
         this.store.set(this.projection())
+        void this.saveFallback()
       },
       resetField: (field) => {
         if (!this.fallback()) return actions.resetField(field)
@@ -475,6 +500,7 @@ export function PetSettingsCard(props: PetSettingsCardProps) {
                 label={t('settings.size')}
                 hint={t('settings.sizeHint')}
                 numeric
+                range={SIZE_RANGE}
                 {...fieldProps}
                 {...state.size}
                 onEdit={(text) => { props.edit('size', text) }}
@@ -485,6 +511,7 @@ export function PetSettingsCard(props: PetSettingsCardProps) {
                 label={t('settings.right')}
                 hint={t('settings.rightHint')}
                 numeric
+                range={INSET_RANGE}
                 {...fieldProps}
                 {...state.right}
                 onEdit={(text) => { props.edit('right', text) }}
@@ -495,6 +522,7 @@ export function PetSettingsCard(props: PetSettingsCardProps) {
                 label={t('settings.bottom')}
                 hint={t('settings.bottomHint')}
                 numeric
+                range={INSET_RANGE}
                 {...fieldProps}
                 {...state.bottom}
                 onEdit={(text) => { props.edit('bottom', text) }}
@@ -540,6 +568,7 @@ export function PetSettingsCard(props: PetSettingsCardProps) {
                   label={t('settings.bubbleScale')}
                   hint={t('settings.bubbleScaleHint')}
                   numeric
+                  range={BUBBLE_SCALE_RANGE}
                   {...fieldProps}
                   {...state.bubbleScale}
                   onEdit={(text) => { props.edit('bubbleScale', text) }}

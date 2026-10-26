@@ -9,7 +9,8 @@ import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest'
 import { cleanup, render, screen } from '@testing-library/react'
 import { useSyncExternalStore } from 'react'
 import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
-import { PetSettingsCard, PetSettingsCardController, type PetSettings } from './PetSettingsCard.tsx'
+import { BUBBLE_SCALE_RANGE, INSET_RANGE, PetSettingsCard, PetSettingsCardController, SIZE_RANGE, type PetSettings } from './PetSettingsCard.tsx'
+import { BUBBLE_SCALE_MAX, BUBBLE_SCALE_MIN, DISPLAY_INSET_MAX, DISPLAY_SIZE_MAX, DISPLAY_SIZE_MIN } from '../persist.ts'
 import { t } from './locales.ts'
 
 vi.mock('@deepseek-ai/dsh-client-store', () => ({ // test-standards-allow: the SDK client bundle is a browser module factory and cannot be imported by Vitest
@@ -103,13 +104,12 @@ describe('pet selection without a Host settings form', () => {
     const face = controller.inject()
     const state = () => face.hooks.petSettingsCard.getSnapshot()
 
-    // When the user chooses the maid whale and clicks Save
+    // When the user chooses the maid whale
     expect(state()).toMatchObject({ petSelectionFallback: true, petId: { text: 'whale-girl' }, dirty: false })
     face.edit('petId', '')
     expect(state()).toMatchObject({ dirty: false, petId: { text: 'whale-girl' } })
     face.edit('petId', 'jyn')
-    expect(state()).toMatchObject({ dirty: true, petId: { text: 'jyn' } })
-    face.save()
+    expect(state()).toMatchObject({ petId: { text: 'jyn' } })
     await vi.waitFor(() => { expect(state().saving).toBe(false) })
 
     // Then the pet service holds it, the draft clears, and the absent Host form is untouched
@@ -120,7 +120,7 @@ describe('pet selection without a Host settings form', () => {
     controller.dispose()
   })
 
-  it('user keeps the draft when the pet API refuses the selection', async () => {
+  it('user sees the selection go back when the pet API refuses it', async () => {
     // Given the Host has no pet form and the pet API still serves its selection
     vi.useFakeTimers()
     const { scope } = unavailableForm()
@@ -134,12 +134,11 @@ describe('pet selection without a Host settings form', () => {
     const controller = new PetSettingsCardController(scope)
     await vi.advanceTimersByTimeAsync(0)
     const face = controller.inject()
-    // When the user saves a selection the pet API refuses
+    // When the user picks a pet the pet API refuses
     face.edit('petId', 'jyn')
-    face.save()
     await vi.waitFor(() => { expect(face.hooks.petSettingsCard.getSnapshot().saving).toBe(false) })
-    // Then the choice remains staged and the failure is visible
-    expect(face.hooks.petSettingsCard.getSnapshot()).toMatchObject({ dirty: true, failed: true, petId: { text: 'jyn' } })
+    // Then the choice is back on the persisted pet and the failure is visible
+    expect(face.hooks.petSettingsCard.getSnapshot()).toMatchObject({ dirty: false, failed: true, petId: { text: 'whale-girl' } })
     controller.dispose()
   })
 })
@@ -166,11 +165,10 @@ describe('pet visibility without a Host settings form', () => {
     const face = controller.inject()
     const state = () => face.hooks.petSettingsCard.getSnapshot()
 
-    // When the user switches the pet off and clicks Save
+    // When the user switches the pet off
     expect(state()).toMatchObject({ petSelectionFallback: true, visible: { text: 'true' }, dirty: false })
     face.edit('visible', 'false')
-    expect(state()).toMatchObject({ dirty: true, visible: { text: 'false' } })
-    face.save()
+    expect(state()).toMatchObject({ visible: { text: 'false' } })
     await vi.waitFor(() => { expect(state().saving).toBe(false) })
 
     // Then the pet service holds it, the draft clears, and the absent Host form is untouched
@@ -181,7 +179,7 @@ describe('pet visibility without a Host settings form', () => {
     controller.dispose()
   })
 
-  it('user keeps the draft when the pet API refuses the visibility write', async () => {
+  it('user sees the switch go back when the pet API refuses the visibility write', async () => {
     // Given the Host has no pet form and the pet API refuses visibility writes
     vi.useFakeTimers()
     const { scope } = unavailableForm()
@@ -195,12 +193,11 @@ describe('pet visibility without a Host settings form', () => {
     const controller = new PetSettingsCardController(scope)
     await vi.advanceTimersByTimeAsync(0)
     const face = controller.inject()
-    // When the user saves a visibility the pet API refuses
+    // When the user flips a visibility the pet API refuses
     face.edit('visible', 'false')
-    face.save()
     await vi.waitFor(() => { expect(face.hooks.petSettingsCard.getSnapshot().saving).toBe(false) })
-    // Then the switch keeps the draft and the failure is visible
-    expect(face.hooks.petSettingsCard.getSnapshot()).toMatchObject({ dirty: true, failed: true, visible: { text: 'false' } })
+    // Then the switch is back on the persisted visibility and the failure is visible
+    expect(face.hooks.petSettingsCard.getSnapshot()).toMatchObject({ dirty: false, failed: true, visible: { text: 'true' } })
     controller.dispose()
   })
 })
@@ -273,13 +270,12 @@ describe('the status bubble switch on the Host settings form', () => {
     expect(screen.getByLabelText(t('settings.statusBubbles'))).toBeTruthy()
     expect(state()).toMatchObject({ statusBubbles: { text: 'auto', invalid: false } })
 
-    // When the user picks Off and saves
+    // When the user picks Off
     face.edit('statusBubbles', 'off')
-    expect(state()).toMatchObject({ dirty: true, statusBubbles: { text: 'off' } })
-    face.save()
+    expect(state()).toMatchObject({ statusBubbles: { text: 'off' } })
     await vi.waitFor(() => { expect(state().saving).toBe(false) })
 
-    // Then the settings document holds the mode, and the draft clears
+    // Then the settings document holds the mode with no further step, and the draft clears
     expect(mutate).toHaveBeenCalledWith([{ op: 'set', path: ['statusBubbles'], value: 'off' }])
     expect(value().user?.statusBubbles).toBe('off')
     expect(state()).toMatchObject({ dirty: false, failed: false, statusBubbles: { text: 'off' } })
@@ -298,5 +294,15 @@ describe('the status bubble switch on the Host settings form', () => {
       invalid: true,
       statusBubbles: { text: 'maybe', invalid: true },
     })
+  })
+})
+
+describe('the coarse sliders on the display fields', () => {
+  it('cover the bounds the host schema accepts for size and bubble scale', () => {
+    // The card spells the spans as literals because the browser half never
+    // imports the host module; this keeps the two from drifting apart.
+    expect(SIZE_RANGE).toMatchObject({ min: DISPLAY_SIZE_MIN, max: DISPLAY_SIZE_MAX })
+    expect(BUBBLE_SCALE_RANGE).toMatchObject({ min: BUBBLE_SCALE_MIN, max: BUBBLE_SCALE_MAX })
+    expect(INSET_RANGE.max).toBeLessThanOrEqual(DISPLAY_INSET_MAX)
   })
 })
