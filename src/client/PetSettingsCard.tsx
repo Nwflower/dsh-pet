@@ -15,7 +15,9 @@ import type { ConfigForm } from '@deepseek-ai/dsh-client-ui-settings/client'
 import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 // Type-only: pulls the settings-surface SlotMap merge (the 'settings.section' entry).
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
-import { PluginSettingsCard, ValueField, BooleanField, ChoiceField } from './PluginSettingsCard.tsx'
+import type {} from './web-extension-contract.ts'
+import { PluginSettingsCard, ValueField, BooleanField, ChoiceField, ToggleSwitch } from './PluginSettingsCard.tsx'
+import { PetPreview, type PetPreviewDefinition } from './PetPreview.tsx'
 import { CardForm, booleanField, choiceField, numberField, type CardActions, type CardShell, type FieldState as CardFieldState } from './settings-form.ts'
 import sectionCss from './settings-section.module.css'
 
@@ -65,6 +67,8 @@ export interface PetSettingsCardState extends CardShell {
   statusBubbles: CardFieldState
   /** Pet choices (registry ids + display names), loaded from the host. */
   petChoices: readonly { value: string; label: string }[]
+  /** The same registry entries with the visual data their thumbnails need. */
+  petPreviews: readonly PetPreviewDefinition[]
 }
 
 /** The registration-side face the card's slot entry injects. */
@@ -82,11 +86,18 @@ export interface PetSettingsCardFace extends CardActions {
  */
 const STATUS_BUBBLE_CHOICES = ['auto', 'off'] as const
 
+/**
+ * The spans the coarse sliders cover, spelled as literals for the same reason.
+ * Size and bubble scale are the schema's own bounds (src/persist.ts); the
+ * insets reach the schema's far end only by typing, so their slider covers the
+ * distances a window can show.
+ */
+export const SIZE_RANGE = { min: 32, max: 1024, step: 1 }
+export const INSET_RANGE = { min: 0, max: 1000, step: 1 }
+export const BUBBLE_SCALE_RANGE = { min: 0.5, max: 2, step: 0.05 }
+
 /** One registry choice as served by '/api/pet/pets'. */
-interface PetChoice {
-  id: string
-  displayName: string
-}
+type PetChoice = PetPreviewDefinition
 
 /** Fetch the registry list (the same data the sprite renders from). */
 async function fetchPetChoices(): Promise<PetChoice[]> {
@@ -122,11 +133,14 @@ export class PetSettingsCardController {
   // without rebuilding the form.
   private readonly petChoices: string[] = []
   private readonly petLabels = new Map<string, string>()
+  private petPreviews: PetPreviewDefinition[] = []
   private selectedPetId: string | undefined
   private selectedVisible: boolean | undefined
   private stagedPetId: string | undefined
   private stagedVisible: boolean | undefined
   private savingPet = false
+  /** A fallback pick made while a write was in flight. */
+  private fallbackQueued = false
   private petSaveFailed = false
   private loaded = false
   private attempts = 0
@@ -171,6 +185,7 @@ export class PetSettingsCardController {
       const list = await fetchPetChoices()
       if (this.disposed) return
       this.petChoices.splice(0, this.petChoices.length, ...list.map(choice => choice.id))
+      this.petPreviews = list
       for (const choice of list) this.petLabels.set(choice.id, choice.displayName)
       this.loaded = true
       this.store.set(this.projection())
@@ -219,12 +234,16 @@ export class PetSettingsCardController {
    * Persist the staged selection and visibility through the pet API — the only
    * writer available when the aggregate shell serves this card, since there is
    * no Host settings form to mutate — then confirm the read-back before the
-   * drafts are cleared.
+   * drafts are cleared. A refused write puts both picks back to what the pet
+   * persisted. A pick made while a write is in flight runs once it settles.
    */
   private async saveFallback(): Promise<void> {
     const petId = this.stagedPetId
     const visible = this.stagedVisible
-    if (this.savingPet) return
+    if (this.savingPet) {
+      this.fallbackQueued = true
+      return
+    }
     if (petId === undefined && visible === undefined) return
     if (petId !== undefined && !this.petChoices.includes(petId)) return
     this.savingPet = true
@@ -259,9 +278,15 @@ export class PetSettingsCardController {
       if (this.stagedVisible === visible) this.stagedVisible = undefined
     } catch {
       this.petSaveFailed = true
+      if (this.stagedPetId === petId) this.stagedPetId = undefined
+      if (this.stagedVisible === visible) this.stagedVisible = undefined
     } finally {
       this.savingPet = false
       if (!this.disposed) this.store.set(this.projection())
+    }
+    if (this.fallbackQueued && !this.disposed) {
+      this.fallbackQueued = false
+      await this.saveFallback()
     }
   }
 
@@ -296,6 +321,7 @@ export class PetSettingsCardController {
           ? { ...configuredPet, text: this.selectedPetId }
           : configuredPet,
       petChoices: this.petChoices.map(id => ({ value: id, label: this.petLabels.get(id) ?? id })),
+      petPreviews: this.petPreviews,
     }
   }
 
@@ -307,6 +333,8 @@ export class PetSettingsCardController {
     const actions = this.form.actions()
     return {
       hooks: { petSettingsCard: this.store },
+      // The fallback's two fields are both picks, so each is written through
+      // the pet API the moment it is made, as the form writes its own picks.
       edit: (field, value) => {
         if (!this.fallback()) return actions.edit(field, value)
         if (field === 'petId') this.stagedPetId = value === '' ? undefined : value
@@ -314,6 +342,7 @@ export class PetSettingsCardController {
         else return
         this.petSaveFailed = false
         this.store.set(this.projection())
+        void this.saveFallback()
       },
       resetField: (field) => {
         if (!this.fallback()) return actions.resetField(field)
@@ -368,126 +397,188 @@ export function PetSettingsCard(props: PetSettingsCardProps) {
     resetLabel: t('settings.reset'),
     invalidLabel: t('settings.invalidNumber'),
     disabled,
+    presentation: 'segment' as const,
   }
+  // The master switch sits in the header, as the Workshop and Usage pages
+  // carry theirs; the fallback has no Host form to write it through.
+  const enabledSwitch = state.petSelectionFallback
+    ? undefined
+    : (
+      <ToggleSwitch
+        labelledBy="settings-pet-title"
+        checked={state.enabled.text !== 'false'}
+        disabled={disabled}
+        onChange={(next) => { props.edit('enabled', String(next)) }}
+      />
+    )
   return (
     <PluginSettingsCard
       t={t}
       titleKey="settings.title"
+      titleId="settings-pet-title"
       descriptionKey="settings.description"
       descriptionNode={state.petSelectionFallback ? t('settings.petHint') : undefined}
+      headerAction={enabledSwitch}
       state={state}
       onSave={props.save}
       onDiscard={props.discard}
       alwaysOpen
     >
-      {state.petSelectionFallback ? null : <BooleanField
-        id="settings-pet-enabled"
-        label={t('settings.enabled')}
-        hint={t('settings.enabledHint')}
-        inheritLabel={t('settings.inherit')}
-        onLabel={t('settings.on')}
-        offLabel={t('settings.off')}
-        {...fieldProps}
-        {...state.enabled}
-        onEdit={(text) => { props.edit('enabled', text) }}
-        onReset={() => { props.resetField('enabled') }}
-      />}
-      {state.petSelectionFallback ? null : <BooleanField
-        id="settings-pet-decoration"
-        label={t('settings.decoration')}
-        hint={t('settings.decorationHint')}
-        inheritLabel={t('settings.inherit')}
-        onLabel={t('settings.on')}
-        offLabel={t('settings.off')}
-        {...fieldProps}
-        {...state.decorationEnabled}
-        onEdit={(text) => { props.edit('decorationEnabled', text) }}
-        onReset={() => { props.resetField('decorationEnabled') }}
-      />}
-      {state.petSelectionFallback ? null : <ChoiceField
-        id="settings-pet-status-bubbles"
-        label={t('settings.statusBubbles')}
-        hint={t('settings.statusBubblesHint')}
-        inheritLabel={t('settings.inherit')}
-        {...fieldProps}
-        {...state.statusBubbles}
-        choices={[
-          { value: STATUS_BUBBLE_CHOICES[0], label: t('settings.on') },
-          { value: STATUS_BUBBLE_CHOICES[1], label: t('settings.off') },
-        ]}
-        onEdit={(text) => { props.edit('statusBubbles', text) }}
-        onReset={() => { props.resetField('statusBubbles') }}
-      />}
-      <ChoiceField
-        id="settings-pet-pet"
-        label={t('settings.pet')}
-        hint={t('settings.petHint')}
-        inheritLabel={t('settings.inherit')}
-        {...fieldProps}
-        {...state.petId}
-        choices={state.petChoices}
-        onEdit={(text) => { props.edit('petId', text) }}
-        onReset={() => { props.resetField('petId') }}
-      />
-      <BooleanField
-        id="settings-pet-visible"
-        label={t('settings.visible')}
-        hint={t('settings.visibleHint')}
-        inheritLabel={t('settings.inherit')}
-        onLabel={t('settings.on')}
-        offLabel={t('settings.off')}
-        {...fieldProps}
-        {...state.visible}
-        onEdit={(text) => { props.edit('visible', text) }}
-        onReset={() => { props.resetField('visible') }}
-      />
-      {state.petSelectionFallback ? null : <ValueField
-        id="settings-pet-size"
-        label={t('settings.size')}
-        hint={t('settings.sizeHint')}
-        numeric
-        {...fieldProps}
-        {...state.size}
-        onEdit={(text) => { props.edit('size', text) }}
-        onReset={() => { props.resetField('size') }}
-      />}
-      {state.petSelectionFallback ? null : <ValueField
-        id="settings-pet-right"
-        label={t('settings.right')}
-        hint={t('settings.rightHint')}
-        numeric
-        {...fieldProps}
-        {...state.right}
-        onEdit={(text) => { props.edit('right', text) }}
-        onReset={() => { props.resetField('right') }}
-      />}
-      {state.petSelectionFallback ? null : <ValueField
-        id="settings-pet-bottom"
-        label={t('settings.bottom')}
-        hint={t('settings.bottomHint')}
-        numeric
-        {...fieldProps}
-        {...state.bottom}
-        onEdit={(text) => { props.edit('bottom', text) }}
-        onReset={() => { props.resetField('bottom') }}
-      />}
-      {state.petSelectionFallback ? null : <ValueField
-        id="settings-pet-bubble-scale"
-        label={t('settings.bubbleScale')}
-        hint={t('settings.bubbleScaleHint')}
-        numeric
-        {...fieldProps}
-        {...state.bubbleScale}
-        onEdit={(text) => { props.edit('bubbleScale', text) }}
-        onReset={() => { props.resetField('bubbleScale') }}
-      />}
+      <div className={sectionCss.settingsLayout}>
+        <section className={sectionCss.selectionGroup}>
+          <div className={sectionCss.groupHeader}>
+            <h3 className={sectionCss.groupTitle} id="settings-pet-selection-title">{t('settings.pet')}</h3>
+            {state.petId.overridden
+              ? (
+                <button
+                  type="button"
+                  className={sectionCss.textAction}
+                  disabled={disabled}
+                  onClick={() => { props.resetField('petId') }}
+                >
+                  {t('settings.reset')}
+                </button>
+              )
+              : null}
+          </div>
+          <div
+            id="settings-pet-pet"
+            className={sectionCss.petGrid}
+            role="group"
+            aria-labelledby="settings-pet-selection-title"
+          >
+            {state.petPreviews.map(pet => {
+              const selected = state.petId.text === pet.id
+              return (
+                <button
+                  key={pet.id}
+                  type="button"
+                  className={selected ? `${sectionCss.petChoice} ${sectionCss.petChoiceSelected}` : sectionCss.petChoice}
+                  aria-pressed={selected}
+                  title={pet.displayName}
+                  disabled={disabled}
+                  onClick={() => { props.edit('petId', pet.id) }}
+                >
+                  <PetPreview pet={pet} />
+                  <span className={sectionCss.petChoiceLabel}>{pet.displayName}</span>
+                </button>
+              )
+            })}
+          </div>
+          <p className={state.petId.invalid ? sectionCss.invalid : sectionCss.groupHint}>
+            {state.petId.invalid ? t('settings.invalidNumber') : t('settings.petHint')}
+          </p>
+        </section>
+
+        <div className={sectionCss.settingsColumn}>
+          <section className={sectionCss.settingsGroup}>
+            <div className={sectionCss.groupHeader}>
+              <h3 className={sectionCss.groupTitle} id="settings-pet-display-title">{t('settings.displayGroup')}</h3>
+            </div>
+            <div className={sectionCss.fields}>
+              <BooleanField
+                id="settings-pet-visible"
+                label={t('settings.visible')}
+                hint={t('settings.visibleHint')}
+                inheritLabel={t('settings.inherit')}
+                onLabel={t('settings.on')}
+                offLabel={t('settings.off')}
+                {...fieldProps}
+                {...state.visible}
+                onEdit={(text) => { props.edit('visible', text) }}
+                onReset={() => { props.resetField('visible') }}
+              />
+              {state.petSelectionFallback ? null : <ValueField
+                id="settings-pet-size"
+                label={t('settings.size')}
+                hint={t('settings.sizeHint')}
+                numeric
+                range={SIZE_RANGE}
+                {...fieldProps}
+                {...state.size}
+                onEdit={(text) => { props.edit('size', text) }}
+                onReset={() => { props.resetField('size') }}
+              />}
+              {state.petSelectionFallback ? null : <ValueField
+                id="settings-pet-right"
+                label={t('settings.right')}
+                hint={t('settings.rightHint')}
+                numeric
+                range={INSET_RANGE}
+                {...fieldProps}
+                {...state.right}
+                onEdit={(text) => { props.edit('right', text) }}
+                onReset={() => { props.resetField('right') }}
+              />}
+              {state.petSelectionFallback ? null : <ValueField
+                id="settings-pet-bottom"
+                label={t('settings.bottom')}
+                hint={t('settings.bottomHint')}
+                numeric
+                range={INSET_RANGE}
+                {...fieldProps}
+                {...state.bottom}
+                onEdit={(text) => { props.edit('bottom', text) }}
+                onReset={() => { props.resetField('bottom') }}
+              />}
+            </div>
+          </section>
+
+          {state.petSelectionFallback ? null : (
+            <section className={sectionCss.settingsGroup}>
+              <div className={sectionCss.groupHeader}>
+                <h3 className={sectionCss.groupTitle} id="settings-pet-behavior-title">{t('settings.bubbleGroup')}</h3>
+              </div>
+              <div className={sectionCss.fields}>
+                <BooleanField
+                  id="settings-pet-decoration"
+                  label={t('settings.decoration')}
+                  hint={t('settings.decorationHint')}
+                  inheritLabel={t('settings.inherit')}
+                  onLabel={t('settings.on')}
+                  offLabel={t('settings.off')}
+                  {...fieldProps}
+                  {...state.decorationEnabled}
+                  onEdit={(text) => { props.edit('decorationEnabled', text) }}
+                  onReset={() => { props.resetField('decorationEnabled') }}
+                />
+                <ChoiceField
+                  id="settings-pet-status-bubbles"
+                  label={t('settings.statusBubbles')}
+                  hint={t('settings.statusBubblesHint')}
+                  inheritLabel={t('settings.inherit')}
+                  {...fieldProps}
+                  {...state.statusBubbles}
+                  choices={[
+                    { value: STATUS_BUBBLE_CHOICES[0], label: t('settings.on') },
+                    { value: STATUS_BUBBLE_CHOICES[1], label: t('settings.off') },
+                  ]}
+                  onEdit={(text) => { props.edit('statusBubbles', text) }}
+                  onReset={() => { props.resetField('statusBubbles') }}
+                />
+                <ValueField
+                  id="settings-pet-bubble-scale"
+                  label={t('settings.bubbleScale')}
+                  hint={t('settings.bubbleScaleHint')}
+                  numeric
+                  range={BUBBLE_SCALE_RANGE}
+                  {...fieldProps}
+                  {...state.bubbleScale}
+                  onEdit={(text) => { props.edit('bubbleScale', text) }}
+                  onReset={() => { props.resetField('bubbleScale') }}
+                />
+              </div>
+            </section>
+          )}
+        </div>
+      </div>
     </PluginSettingsCard>
   )
 }
 
 /** Props the settings section binds for the pet card page. */
 export type PetSettingsSectionProps =
-  PropsRuntime<'settings.section'>
+  (PropsRuntime<'settings.section'> | PropsRuntime<'web-ui.extension'>)
   & PropsLocale<'pet'>
   & InjectFace<PetSettingsCardFace>
 
@@ -495,7 +586,7 @@ export type PetSettingsSectionProps =
 export function PetSettingsSection(props: PetSettingsSectionProps): ReactNode {
   const { t, usePetSettingsCard, save, discard, edit, resetField } = props
   return (
-    <ul className={sectionCss.sectionList}>
+    <ul className={sectionCss.sectionList} data-dsh-plugin="pet" data-dsh-part="panel">
       <PetSettingsCard t={t} usePetSettingsCard={usePetSettingsCard} save={save} discard={discard} edit={edit} resetField={resetField} />
     </ul>
   )

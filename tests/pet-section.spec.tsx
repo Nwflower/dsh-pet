@@ -7,7 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useSyncExternalStore, type ComponentProps } from 'react'
 import type { ConfigForm, ConfigFormSnapshot } from '@deepseek-ai/dsh-client-ui-settings/client'
 // The npm SDK's client half is a closure-factory bundle for the GUI's
@@ -122,34 +122,45 @@ describe('PetSettingsSection', () => {
     controller.dispose()
   })
 
-  it('renders the pet settings card open as a first-level settings page', () => {
-    render(<PetSettingsSection {...sectionProps(new FakeScope({}))} />)
-    const enabled = screen.getByLabelText(/enable the pet/i)
-    expect(enabled.id).toBe('settings-pet-enabled')
+  it('user flips the header switch and the pet is turned off at once', async () => {
+    // Given a card whose namespace leaves the pet on by default
+    const scope = new FakeScope({})
+    render(<PetSettingsSection {...sectionProps(scope)} />)
+    const enabled = screen.getByRole('switch', { name: 'Pet' })
+    expect(enabled.getAttribute('aria-checked')).toBe('true')
+
+    // When the user flips the switch in the card header
     fireEvent.click(enabled)
-    const options = screen.getAllByRole('option').map(option => option.textContent)
-    expect(options).toEqual(['Inherit', 'On', 'Off'])
+
+    // Then the namespace holds the pet off and the switch reads off
+    await waitFor(() => { expect(scope.value.enabled).toBe(false) })
+    expect(enabled.getAttribute('aria-checked')).toBe('false')
   })
 
-  it('renders every live registry entry in the existing pet selector', async () => {
+  it('user sees the visibility choices as visible segments', () => {
+    render(<PetSettingsSection {...sectionProps(new FakeScope({}))} />)
+    const visible = screen.getByRole('group', { name: 'Show the pet' })
+    expect(within(visible).getAllByRole('button').map(button => button.textContent)).toEqual(['Default', 'On', 'Off'])
+  })
+
+  it('renders every live registry entry as a visual pet choice', async () => {
     render(<PetSettingsSection {...sectionProps(new FakeScope({ petId: 'whale-girl' }))} />)
 
     await waitFor(() => {
-      expect(screen.getByLabelText('Pet').textContent).toContain('鲸鱼娘（原版）')
+      expect(screen.getByRole('group', { name: 'Pet' }).textContent).toContain('鲸鱼娘（原版）')
     })
-    fireEvent.click(screen.getByLabelText('Pet'))
-    expect(screen.getAllByRole('option').map(option => option.textContent)).toEqual([
-      'Inherit',
+    expect(Array.from(screen.getByRole('group', { name: 'Pet' }).querySelectorAll('button')).map(choice => choice.getAttribute('title'))).toEqual([
       '鲸鱼娘（原版）',
       '鲸鱼娘（精致版）',
     ])
+    expect(within(screen.getByRole('group', { name: 'Pet' })).getByRole('button', { name: '鲸鱼娘（原版）' }).getAttribute('aria-pressed')).toBe('true')
   })
 
   it('user sees no pet directory diagnostics block in the settings page', async () => {
     // Given the registry serves its pets to the settings page
     render(<PetSettingsSection {...sectionProps(new FakeScope({ petId: 'whale-girl' }))} />)
     await waitFor(() => {
-      expect(screen.getByLabelText('Pet').textContent).toContain('鲸鱼娘（原版）')
+      expect(screen.getByRole('group', { name: 'Pet' }).textContent).toContain('鲸鱼娘（原版）')
     })
 
     // Then the card carries no diagnostics block and never asks the host for one
@@ -157,36 +168,39 @@ describe('PetSettingsSection', () => {
     expect(fetch).not.toHaveBeenCalledWith('/api/pet/diagnostics')
   })
 
-  it('user sees the save reported as failed when the deployment refuses the write', async () => {
+  it('user sees the write reported as failed when the deployment refuses it', async () => {
     // Given a served form whose namespace mutation the deployment refuses
     const scope = new FakeScope({ size: 160 })
     scope.accepted = false
     render(<PetSettingsSection {...sectionProps(scope)} />)
 
-    // When the user stages a new size and saves
-    fireEvent.change(screen.getByLabelText('Size (px)'), { target: { value: '240' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    // When the user types a new size and presses Enter
+    const size = screen.getByLabelText('Size (px)')
+    fireEvent.change(size, { target: { value: '240' } })
+    fireEvent.keyDown(size, { key: 'Enter' })
 
-    // Then the card reports the failure instead of a landed save
+    // Then the card reports the failure instead of a landed write
     const failure = await screen.findByText(en['settings.saveFailed'])
     expect(failure.getAttribute('role')).toBe('status')
-    // And the refused draft is still staged for the user to correct
+    // And the refused text stays in the field for the user to correct
     expect(scope.value.size).toBe(160)
+    expect((size as HTMLInputElement).value).toBe('240')
   })
 
-  it('user saves a new size and the card reports the write as landed', async () => {
+  it('user enters a new size and the card reports the write as landed', async () => {
     // Given a served form whose namespace mutation the deployment accepts
     const scope = new FakeScope({ size: 160 })
     render(<PetSettingsSection {...sectionProps(scope)} />)
 
-    // When the user stages a new size and saves
-    fireEvent.change(screen.getByLabelText('Size (px)'), { target: { value: '240' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Save' }))
+    // When the user types a new size and presses Enter
+    const size = screen.getByLabelText('Size (px)')
+    fireEvent.change(size, { target: { value: '240' } })
+    fireEvent.keyDown(size, { key: 'Enter' })
+    expect(screen.queryByRole('button', { name: 'Save' })).toBeNull()
 
-    // Then the staged size reaches the namespace and no failure is reported
-    await waitFor(() => {
-      expect((screen.getByLabelText('Size (px)') as HTMLInputElement).value).toBe('240')
-    })
+    // Then the size reaches the namespace and no failure is reported
+    await waitFor(() => { expect(scope.value.size).toBe(240) })
+    expect((size as HTMLInputElement).value).toBe('240')
     expect(screen.queryByText(en['settings.saveFailed'])).toBeNull()
   })
 })
