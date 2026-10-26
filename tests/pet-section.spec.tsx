@@ -7,7 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { useSyncExternalStore, type ComponentProps } from 'react'
 import type { ConfigForm, ConfigFormSnapshot } from '@deepseek-ai/dsh-client-ui-settings/client'
 // The npm SDK's client half is a closure-factory bundle for the GUI's
@@ -122,27 +122,27 @@ describe('PetSettingsSection', () => {
     controller.dispose()
   })
 
-  it('renders the pet settings card open as a first-level settings page', () => {
+  it('renders the pet settings card open with visible segmented choices', () => {
     render(<PetSettingsSection {...sectionProps(new FakeScope({}))} />)
-    const enabled = screen.getByLabelText(/enable the pet/i)
+    const enabled = screen.getByRole('group', { name: /enable the pet/i })
     expect(enabled.id).toBe('settings-pet-enabled')
-    fireEvent.click(enabled)
-    const options = screen.getAllByRole('option').map(option => option.textContent)
-    expect(options).toEqual(['Inherit', 'On', 'Off'])
+    expect(within(enabled).getAllByRole('button').map(button => button.textContent)).toEqual(['Inherit', 'On', 'Off'])
+    expect(within(enabled).getByRole('button', { name: 'Inherit' }).getAttribute('aria-pressed')).toBe('true')
+    fireEvent.click(within(enabled).getByRole('button', { name: 'On' }))
+    expect(within(enabled).getByRole('button', { name: 'On' }).getAttribute('aria-pressed')).toBe('true')
   })
 
-  it('renders every live registry entry in the existing pet selector', async () => {
+  it('renders every live registry entry as a visual pet choice', async () => {
     render(<PetSettingsSection {...sectionProps(new FakeScope({ petId: 'whale-girl' }))} />)
 
     await waitFor(() => {
       expect(screen.getByLabelText('Pet').textContent).toContain('鲸鱼娘（原版）')
     })
-    fireEvent.click(screen.getByLabelText('Pet'))
-    expect(screen.getAllByRole('option').map(option => option.textContent)).toEqual([
-      'Inherit',
+    expect(Array.from(screen.getByLabelText('Pet').querySelectorAll('button')).map(choice => choice.getAttribute('title'))).toEqual([
       '鲸鱼娘（原版）',
       '鲸鱼娘（精致版）',
     ])
+    expect(within(screen.getByLabelText('Pet')).getByRole('button', { name: '鲸鱼娘（原版）' }).getAttribute('aria-pressed')).toBe('true')
   })
 
   it('user sees no pet directory diagnostics block in the settings page', async () => {

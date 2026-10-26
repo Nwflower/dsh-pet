@@ -41,7 +41,8 @@ import { defaultPetRendererRegistry } from './renderers/registry.ts'
 import { live2dRenderer } from './renderers/live2d.ts'
 import { frames2dRenderer } from './renderers/frames2d.ts'
 import { registerPetUiTeardown, takeoverPetUiTeardown } from './ui-teardown.ts'
-import { PetSettingsSection, PetSettingsCardController, type PetSettings } from './PetSettingsCard.tsx'
+import { PetSettingsCardController, type PetSettings } from './PetSettingsCard.tsx'
+import { installPetSettingsRegistration } from './settings-registration.ts'
 import { NS, en, zh } from './locales.ts'
 import { mainViewSessionId } from './main-session.ts'
 import { reportDailyHeartbeat } from './telemetry.ts'
@@ -381,33 +382,14 @@ export function apply(ctx: ClientContext): void {
       : snapshot.status === 'unavailable'
   }
 
-  // First-level settings section: one staged form over the 'pet' profile
-  // entry's configuration, registered as a top-level settings page. The
-  // controller loads the petId choices from the registry endpoint itself — the
-  // registry lists the available pets (built-in assets plus user dirs), so the
-  // section only ever shows installed pets. Installing new pets happens in the
-  // Workshop store.
+  // One staged form follows the pet page between Web Extensions and the
+  // standalone first-level section. Seat migration does not reset drafts.
   const petSettings = new PetSettingsCardController(settingsForm)
-  // The section entry owns the controller: unregistering it (fiber disposal,
-  // hot reload) releases the form subscription through petSettings.dispose.
-  ctx.slots.inject('settings.section', () => {
-    try {
-      const unregister = ctx.slots.register({
-        name: 'settings.section',
-        id: 'pet',
-        order: 130,
-        label: () => ctx.locale.bind('pet')('settings.title'),
-        locale: 'pet',
-        inject: () => petSettings.inject(),
-      }, PetSettingsSection)
-      return () => {
-        unregister()
-        petSettings.dispose()
-      }
-    } catch {
-      return () => {}
-    }
-  })
+  const disposeSettingsRegistration = installPetSettingsRegistration(ctx, petSettings)
+  ctx.effect(() => () => {
+    disposeSettingsRegistration()
+    petSettings.dispose()
+  }, 'pet: settings page')
 
   // The global pet entry, its store, and the poll loop live while the plugin
   // is enabled; toggling the setting off hides the pet and stops polling.

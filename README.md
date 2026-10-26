@@ -26,7 +26,7 @@ Re-engineered from desktop companion concepts into an official DSH cordis bundle
 | Feature | Description |
 |---|---|
 | Multi-pet registry | The host scans built-in `assets/`, the hatch-pet custom pets directory, and composed config entries; each pet is a manifest plus an atlas |
-| Pet selection in settings | The plugin settings card lists every registered pet (built-in assets plus user directories — the installed set); switching persists and the sprite swaps immediately. The card sits in the first-level Pet settings section |
+| Pet selection in settings | Visual preview cards list every registered pet (built-in assets plus user directories — the installed set); switching persists and the sprite swaps immediately. The page sits under Settings → Web Extensions → Pet, or in the standalone first-level Pet section without that parent |
 | Per-pet naming | Rename from the hover panel; each pet keeps its own name (stored per pet id, migrated from the legacy flat name) |
 | State animation | Official session activity → manifest-defined sequences of 9-state tracks; each track finishes its full duration before the sequence advances and the complete sequence loops |
 | Head-pat interaction | Click the pet → bubble feedback + affinity +1 (10s cooldown) |
