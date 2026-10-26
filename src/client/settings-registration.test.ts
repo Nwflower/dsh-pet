@@ -4,7 +4,7 @@ import { installPetSettingsRegistration } from './settings-registration.ts'
 function makeCtx() {
   let service: object | undefined
   let changed: (() => void) | undefined
-  const registered: Array<Record<string, unknown>> = []
+  const registered: Array<{ options: Record<string, unknown> }> = []
   const ctx = {
     get: (name: string) => name === 'webUiExtensions' ? service : undefined,
     on: (event: string, listener: () => void) => {
@@ -22,12 +22,34 @@ function makeCtx() {
           changed?.()
         }
       },
+      entries: (slot: string) => registered.filter(entry => entry.options.name === slot),
     },
+  }
+  const pushPage = (page: Record<string, unknown>) => {
+    const entry = {
+      options: {
+        name: 'web-ui.extension',
+        key: page.key,
+        locale: page.locale,
+        inject: page.inject,
+        children: page.children,
+      },
+    }
+    registered.push(entry)
+    changed?.()
+    return () => {
+      const index = registered.indexOf(entry)
+      if (index >= 0) registered.splice(index, 1)
+      changed?.()
+    }
   }
   return {
     ctx,
     registered,
-    setService(value: object | undefined) { service = value; changed?.() },
+    setService(value: object | undefined) {
+      service = value === undefined ? undefined : { ...value, registerPage: pushPage }
+      changed?.()
+    },
   }
 }
 
