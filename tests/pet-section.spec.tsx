@@ -122,34 +122,45 @@ describe('PetSettingsSection', () => {
     controller.dispose()
   })
 
-  it('renders the pet settings card open with visible segmented choices', () => {
+  it('user flips the header switch and the pet is turned off at once', async () => {
+    // Given a card whose namespace leaves the pet on by default
+    const scope = new FakeScope({})
+    render(<PetSettingsSection {...sectionProps(scope)} />)
+    const enabled = screen.getByRole('switch', { name: 'Pet' })
+    expect(enabled.getAttribute('aria-checked')).toBe('true')
+
+    // When the user flips the switch in the card header
+    fireEvent.click(enabled)
+
+    // Then the namespace holds the pet off and the switch reads off
+    await waitFor(() => { expect(scope.value.enabled).toBe(false) })
+    expect(enabled.getAttribute('aria-checked')).toBe('false')
+  })
+
+  it('user sees the visibility choices as visible segments', () => {
     render(<PetSettingsSection {...sectionProps(new FakeScope({}))} />)
-    const enabled = screen.getByRole('group', { name: /enable the pet/i })
-    expect(enabled.id).toBe('settings-pet-enabled')
-    expect(within(enabled).getAllByRole('button').map(button => button.textContent)).toEqual(['Inherit', 'On', 'Off'])
-    expect(within(enabled).getByRole('button', { name: 'Inherit' }).getAttribute('aria-pressed')).toBe('true')
-    fireEvent.click(within(enabled).getByRole('button', { name: 'On' }))
-    expect(within(enabled).getByRole('button', { name: 'On' }).getAttribute('aria-pressed')).toBe('true')
+    const visible = screen.getByRole('group', { name: 'Show the pet' })
+    expect(within(visible).getAllByRole('button').map(button => button.textContent)).toEqual(['Default', 'On', 'Off'])
   })
 
   it('renders every live registry entry as a visual pet choice', async () => {
     render(<PetSettingsSection {...sectionProps(new FakeScope({ petId: 'whale-girl' }))} />)
 
     await waitFor(() => {
-      expect(screen.getByLabelText('Pet').textContent).toContain('鲸鱼娘（原版）')
+      expect(screen.getByRole('group', { name: 'Pet' }).textContent).toContain('鲸鱼娘（原版）')
     })
-    expect(Array.from(screen.getByLabelText('Pet').querySelectorAll('button')).map(choice => choice.getAttribute('title'))).toEqual([
+    expect(Array.from(screen.getByRole('group', { name: 'Pet' }).querySelectorAll('button')).map(choice => choice.getAttribute('title'))).toEqual([
       '鲸鱼娘（原版）',
       '鲸鱼娘（精致版）',
     ])
-    expect(within(screen.getByLabelText('Pet')).getByRole('button', { name: '鲸鱼娘（原版）' }).getAttribute('aria-pressed')).toBe('true')
+    expect(within(screen.getByRole('group', { name: 'Pet' })).getByRole('button', { name: '鲸鱼娘（原版）' }).getAttribute('aria-pressed')).toBe('true')
   })
 
   it('user sees no pet directory diagnostics block in the settings page', async () => {
     // Given the registry serves its pets to the settings page
     render(<PetSettingsSection {...sectionProps(new FakeScope({ petId: 'whale-girl' }))} />)
     await waitFor(() => {
-      expect(screen.getByLabelText('Pet').textContent).toContain('鲸鱼娘（原版）')
+      expect(screen.getByRole('group', { name: 'Pet' }).textContent).toContain('鲸鱼娘（原版）')
     })
 
     // Then the card carries no diagnostics block and never asks the host for one

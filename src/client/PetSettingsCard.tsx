@@ -16,7 +16,7 @@ import type { SnapshotStore } from '@deepseek-ai/dsh-client-store'
 // Type-only: pulls the settings-surface SlotMap merge (the 'settings.section' entry).
 import type {} from '@deepseek-ai/dsh-client-ui-settings/client'
 import type {} from './web-extension-contract.ts'
-import { PluginSettingsCard, ValueField, BooleanField, ChoiceField } from './PluginSettingsCard.tsx'
+import { PluginSettingsCard, ValueField, BooleanField, ChoiceField, ToggleSwitch } from './PluginSettingsCard.tsx'
 import { PetPreview, type PetPreviewDefinition } from './PetPreview.tsx'
 import { CardForm, booleanField, choiceField, numberField, type CardActions, type CardShell, type FieldState as CardFieldState } from './settings-form.ts'
 import sectionCss from './settings-section.module.css'
@@ -399,12 +399,26 @@ export function PetSettingsCard(props: PetSettingsCardProps) {
     disabled,
     presentation: 'segment' as const,
   }
+  // The master switch sits in the header, as the Workshop and Usage pages
+  // carry theirs; the fallback has no Host form to write it through.
+  const enabledSwitch = state.petSelectionFallback
+    ? undefined
+    : (
+      <ToggleSwitch
+        labelledBy="settings-pet-title"
+        checked={state.enabled.text !== 'false'}
+        disabled={disabled}
+        onChange={(next) => { props.edit('enabled', String(next)) }}
+      />
+    )
   return (
     <PluginSettingsCard
       t={t}
       titleKey="settings.title"
+      titleId="settings-pet-title"
       descriptionKey="settings.description"
       descriptionNode={state.petSelectionFallback ? t('settings.petHint') : undefined}
+      headerAction={enabledSwitch}
       state={state}
       onSave={props.save}
       onDiscard={props.discard}
@@ -451,15 +465,6 @@ export function PetSettingsCard(props: PetSettingsCardProps) {
               )
             })}
           </div>
-          <button
-            type="button"
-            className={sectionCss.inheritChoice}
-            aria-pressed={state.petId.text === ''}
-            disabled={disabled}
-            onClick={() => { props.edit('petId', '') }}
-          >
-            {t('settings.inherit')}
-          </button>
           <p className={state.petId.invalid ? sectionCss.invalid : sectionCss.groupHint}>
             {state.petId.invalid ? t('settings.invalidNumber') : t('settings.petHint')}
           </p>
@@ -468,21 +473,9 @@ export function PetSettingsCard(props: PetSettingsCardProps) {
         <div className={sectionCss.settingsColumn}>
           <section className={sectionCss.settingsGroup}>
             <div className={sectionCss.groupHeader}>
-              <h3 className={sectionCss.groupTitle} id="settings-pet-display-title">{t('settings.visible')}</h3>
+              <h3 className={sectionCss.groupTitle} id="settings-pet-display-title">{t('settings.displayGroup')}</h3>
             </div>
             <div className={sectionCss.fields}>
-              {state.petSelectionFallback ? null : <BooleanField
-                id="settings-pet-enabled"
-                label={t('settings.enabled')}
-                hint={t('settings.enabledHint')}
-                inheritLabel={t('settings.inherit')}
-                onLabel={t('settings.on')}
-                offLabel={t('settings.off')}
-                {...fieldProps}
-                {...state.enabled}
-                onEdit={(text) => { props.edit('enabled', text) }}
-                onReset={() => { props.resetField('enabled') }}
-              />}
               <BooleanField
                 id="settings-pet-visible"
                 label={t('settings.visible')}
@@ -534,7 +527,7 @@ export function PetSettingsCard(props: PetSettingsCardProps) {
           {state.petSelectionFallback ? null : (
             <section className={sectionCss.settingsGroup}>
               <div className={sectionCss.groupHeader}>
-                <h3 className={sectionCss.groupTitle} id="settings-pet-behavior-title">{t('settings.statusBubbles')}</h3>
+                <h3 className={sectionCss.groupTitle} id="settings-pet-behavior-title">{t('settings.bubbleGroup')}</h3>
               </div>
               <div className={sectionCss.fields}>
                 <BooleanField

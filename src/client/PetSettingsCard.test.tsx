@@ -234,7 +234,7 @@ describe('pet settings card rendered without a Host settings form', () => {
     expect(screen.getByLabelText(t('settings.pet'))).toBeTruthy()
     expect(screen.getByLabelText(t('settings.visible'))).toBeTruthy()
     // ...while the fields only the absent Host form owns stay hidden
-    expect(screen.queryByLabelText(t('settings.enabled'))).toBeNull()
+    expect(screen.queryByRole('switch')).toBeNull()
     expect(screen.queryByLabelText(t('settings.size'))).toBeNull()
     controller.dispose()
   })
