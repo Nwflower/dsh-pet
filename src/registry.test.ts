@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { closeSync, existsSync, ftruncateSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { closeSync, existsSync, ftruncateSync, mkdirSync, mkdtempSync, openSync, readFileSync, rmdirSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -1037,6 +1037,126 @@ describe('status decorations (pet-center M5, #567)', () => {
       expect(registry.warnings.some(w => w.includes('does not match cell'))).toBe(false)
     } finally {
       rmSync(root, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('interrupted install staging leftovers (issue #1952)', () => {
+  /** Write one pet fixture directory named 'name' under 'dir'. */
+  function writePet(dir: string, name: string, manifest: Record<string, unknown>): void {
+    mkdirSync(join(dir, name), { recursive: true })
+    writeFileSync(join(dir, name, 'pet.json'), JSON.stringify(manifest), 'utf8')
+  }
+
+  // The staging name the market installer builds before it renames the
+  // directory onto its id: '<id>.install-<base36 ms>-<base36 random>'.
+  const stagingName = 'jyn-loli.install-mvo23x51-thmrh2'
+
+  /**
+   * Undo exactly what writePet wrote, one known path at a time: the pet.json
+   * files this block created, then the directories they leave empty. Nothing
+   * here deletes a tree it did not name, so a stray file in the fixture makes
+   * rmdirSync fail loudly instead of disappearing with it.
+   */
+  function removeFixtures(root: string, names: readonly string[]): void {
+    const petsDir = join(root, 'pets')
+    for (const name of names) {
+      const manifest = join(petsDir, name, 'pet.json')
+      if (existsSync(manifest)) unlinkSync(manifest)
+      const dir = join(petsDir, name)
+      if (existsSync(dir)) rmdirSync(dir)
+    }
+    if (existsSync(petsDir)) rmdirSync(petsDir)
+    if (existsSync(root)) rmdirSync(root)
+  }
+
+  it('keeps the finished pet when a leftover staging directory carries its id', () => {
+    const root = tempDir()
+    try {
+      const petsDir = join(root, 'pets')
+      writePet(petsDir, 'jyn-loli', { id: 'jyn-loli', displayName: 'Jyn Loli', spritesheetPath: 'spritesheet.webp' })
+      // A partial install far enough along to hold a valid manifest: before the
+      // fix it sorted after 'jyn-loli' and won the id collision, so the board
+      // rendered the half-installed pet.
+      writePet(petsDir, stagingName, { id: 'jyn-loli', displayName: 'half installed', spritesheetPath: 'spritesheet.webp' })
+
+      const registry = loadPetRegistry({ packageRoot: root, petsDir, dshPetsDir: '' })
+
+      expect(registry.entries.map(entry => entry.id)).toEqual(['jyn-loli'])
+      expect(registry.byId('jyn-loli')!.displayName).toBe('Jyn Loli')
+      expect(registry.byId('jyn-loli')!.dir).toBe(join(petsDir, 'jyn-loli'))
+
+      const leftover = registry.diagnostics.filter(diagnostic => diagnostic.source.includes(stagingName))
+      expect(leftover).toHaveLength(1)
+      expect(leftover[0]!.level).toBe('warning')
+      expect(leftover[0]!.source).toBe(join(petsDir, stagingName))
+      expect(leftover[0]!.message).toContain(stagingName)
+      expect(registry.warnings.some(warning => warning.includes(stagingName))).toBe(true)
+
+      // Reported, never cleaned up: the scan stays read-only.
+      expect(existsSync(join(petsDir, stagingName))).toBe(true)
+    } finally {
+      removeFixtures(root, ['jyn-loli', stagingName])
+    }
+  })
+
+  it('reports a staging leftover even when it holds no pet.json yet', () => {
+    const root = tempDir()
+    try {
+      const petsDir = join(root, 'pets')
+      writePet(petsDir, 'jyn-loli', { id: 'jyn-loli', displayName: 'Jyn Loli', spritesheetPath: 'spritesheet.webp' })
+      // The shape is filtered before the manifest is looked for, so a leftover
+      // that failed on its first file is still diagnosable.
+      mkdirSync(join(petsDir, stagingName), { recursive: true })
+
+      const registry = loadPetRegistry({ packageRoot: root, petsDir, dshPetsDir: '' })
+
+      expect(registry.entries.map(entry => entry.id)).toEqual(['jyn-loli'])
+      expect(registry.diagnostics.some(diagnostic => diagnostic.source === join(petsDir, stagingName))).toBe(true)
+    } finally {
+      removeFixtures(root, ['jyn-loli', stagingName])
+    }
+  })
+
+  it('leaves a dot-prefixed staging directory to the existing hidden-entry rule', () => {
+    const root = tempDir()
+    try {
+      const petsDir = join(root, 'pets')
+      writePet(petsDir, 'jyn-loli', { id: 'jyn-loli', displayName: 'Jyn Loli', spritesheetPath: 'spritesheet.webp' })
+      const hidden = '.' + stagingName
+      writePet(petsDir, hidden, { id: 'jyn-loli', displayName: 'half installed', spritesheetPath: 'spritesheet.webp' })
+
+      const registry = loadPetRegistry({ packageRoot: root, petsDir, dshPetsDir: '' })
+
+      expect(registry.entries.map(entry => entry.id)).toEqual(['jyn-loli'])
+      expect(registry.byId('jyn-loli')!.displayName).toBe('Jyn Loli')
+      // The dot prefix already drops the directory silently; the staging rule
+      // must not add a second, noisier report for it.
+      expect(registry.diagnostics.some(diagnostic => diagnostic.source.includes(hidden))).toBe(false)
+      expect(registry.warnings.some(warning => warning.includes(hidden))).toBe(false)
+    } finally {
+      removeFixtures(root, ['jyn-loli', '.' + stagingName])
+    }
+  })
+
+  it('keeps a pet directory whose name only mentions .install- outside the staging shape', () => {
+    const root = tempDir()
+    try {
+      const petsDir = join(root, 'pets')
+      writePet(petsDir, 'jyn-loli', { id: 'jyn-loli', displayName: 'Jyn Loli', spritesheetPath: 'spritesheet.webp' })
+      // One base36 segment, not the '<ms>-<random>' pair the installer writes.
+      writePet(petsDir, 'jyn-loli.install-guide', { id: 'jyn-loli-guide', displayName: 'guide', spritesheetPath: 'spritesheet.webp' })
+
+      const registry = loadPetRegistry({ packageRoot: root, petsDir, dshPetsDir: '' })
+
+      // The directory is scanned as an ordinary pet: listed, and carrying
+      // whatever diagnostics its own manifest earns. The staging rule itself
+      // stays silent, so the shape match is exact rather than a prefix test.
+      expect(registry.entries.map(entry => entry.id)).toEqual(['jyn-loli', 'jyn-loli-guide'])
+      expect(registry.warnings.some(warning => warning.includes('install staging leftover'))).toBe(false)
+      expect(registry.diagnostics.some(diagnostic => diagnostic.message.includes('install staging leftover'))).toBe(false)
+    } finally {
+      removeFixtures(root, ['jyn-loli', 'jyn-loli.install-guide'])
     }
   })
 })

@@ -837,6 +837,29 @@ function resolveFrames2dEntry(
   }
 }
 
+/**
+ * Directory-name suffix the market installer carries while it downloads:
+ * '<id>.install-<base36 ms>-<base36 suffix>'
+ * (`installAsset` in dsh-web `packages/dsh-market/src/core/installer.ts` builds
+ * it as `dest + '.install-' + Date.now().toString(36) + '-' +
+ * Math.random().toString(36).slice(2, 8)`). Success renames the staging
+ * directory onto its id, and the failure path removes it, so such a directory
+ * surviving on disk means an install was interrupted and what it holds is a
+ * partial pet.
+ *
+ * The bounds are the producer's real range rather than a guess: base36 of
+ * `Date.now()` is 8 digits today and stays under 11 for several millennia,
+ * and `.slice(2, 8)` always yields exactly 6 base36 characters. A directory
+ * whose name merely mentions '.install-' outside that shape stays an ordinary
+ * pet directory.
+ */
+const PET_INSTALL_STAGING_NAME = /\.install-[0-9a-z]{1,11}-[0-9a-z]{1,11}$/
+
+/** True when a pet directory name is an interrupted-install staging leftover. */
+function isPetInstallStagingName(name: string): boolean {
+  return PET_INSTALL_STAGING_NAME.test(name)
+}
+
 /** Scan one directory of pet folders; entries come back in name order. */
 function scanPetDir(dir: string, options: { assetPrefix?: string; warnings?: string[]; diagnostics?: PetRegistryDiagnostic[] }): PetEntry[] {
   if (!existsSync(dir)) return []
@@ -849,6 +872,20 @@ function scanPetDir(dir: string, options: { assetPrefix?: string; warnings?: str
   names.sort()
   const entries: PetEntry[] = []
   for (const name of names) {
+    // An interrupted market install leaves '<id>.install-<base36>-<base36>'
+    // behind holding a partial pet.json. Because a directory sorts just before
+    // its own staging suffixes and later entries win the id collision below,
+    // the leftover would override the finished pet with the same id. Drop it
+    // before the manifest is read, and only report it: cleanup belongs to the
+    // installer, and a scan must stay read-only.
+    if (isPetInstallStagingName(name)) {
+      const leftover = join(dir, name)
+      const message = 'skipping install staging leftover ' + name + ' (' + leftover
+        + '): an interrupted install left it behind, and it is ignored so it cannot override the finished pet with the same id'
+      options.warnings?.push(message)
+      options.diagnostics?.push({ level: 'warning', source: leftover, message })
+      continue
+    }
     const manifestFile = join(dir, name, 'pet.json')
     if (!existsSync(manifestFile)) continue
     const parsed = readPetJson(manifestFile, options)
